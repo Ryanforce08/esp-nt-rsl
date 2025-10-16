@@ -26,10 +26,10 @@ FMS_CODES = {
 # UI color palette (hex) matching the big status label background
 UI_COLORS = {
     "Unknown": "#808080",
-    "Disabled": "#b00020",
-    "Auto": "#1976d2",
+    "Disabled": "#00ff00",
+    "Auto": "#0000ff",
     "Test": "#f9a825",
-    "Teleop": "#2e7d32",
+    "Teleop": "#ff0000",
 }
 
 def hex_to_rgb(hex_str):

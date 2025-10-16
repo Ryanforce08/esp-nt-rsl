@@ -8,12 +8,15 @@
 #include <FastLED.h>
 
 // -------- Pin Defines --------
-#define LED_R 13   // IO13 - Red (digital out)
-#define LED_B 14   // IO14 - Blue (digital out)
-#define LED_G 15   // IO15 - Green (digital out)
+#define LED_R 3  // IO3 - Red (digital out)
+#define LED_B 5  // IO4 - Blue (digital out)
+#define LED_G 6  // IO6 - Green (digital out)
 
-#define WS_PIN    16   // IO16 - WS281x data
-#define NUM_LEDS  30
+#define WS_PIN 16  // IO16 - WS281x data
+#define NUM_LEDS 30
+
+#define LIMIT_PIN 12   // IO12 - get is the gate is closed (digital in)
+#define MANUAL_PIN 13  //IO13 - get if manual is on (digital in)
 
 // -------- WS281x setup --------
 CRGB leds[NUM_LEDS];
@@ -23,10 +26,9 @@ static String lineBuf;
 uint8_t curR = 0, curG = 0, curB = 0;
 
 void setDiscreteRGB(uint8_t r, uint8_t g, uint8_t b) {
-  // any nonzero is ON, zero is OFF
-  digitalWrite(LED_R, (r > 0) ? HIGH : LOW);
-  digitalWrite(LED_G, (g > 0) ? HIGH : LOW);
-  digitalWrite(LED_B, (b > 0) ? HIGH : LOW);
+  analogWrite(LED_R, r;
+  analogWrite(LED_G, g;
+  analogWrite(LED_B, b;
 }
 
 void setStripRGB(uint8_t r, uint8_t g, uint8_t b) {
@@ -35,7 +37,9 @@ void setStripRGB(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 void applyColor(uint8_t r, uint8_t g, uint8_t b) {
-  curR = r; curG = g; curB = b;
+  curR = r;
+  curG = g;
+  curB = b;
   setDiscreteRGB(r, g, b);
   setStripRGB(r, g, b);
 }
@@ -79,6 +83,12 @@ void setup() {
 }
 
 void loop() {
+  if (digitalRead(MANUAL_PIN) == HIGH) {
+    if (digitalRead(LIMIT_PIN) == HIGH)
+      applyColor((uint8_t)255, (uint8_t)0, (uint8_t)0);
+    else
+      applyColor((uint8_t)0, (uint8_t)255, (uint8_t)0);
+  }
   // Read serial lines (LF-terminated)
   while (Serial.available()) {
     char c = (char)Serial.read();
