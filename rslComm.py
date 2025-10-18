@@ -244,7 +244,8 @@ class FMSStatusApp:
 
         if self.blink_state:
             # Blink OFF
-            self.serial.send_rgb_if_changed((255, 255, 0))
+            print("Blink OFF")
+            self.serial.send_rgb_if_changed(rgb=(255, 255, 0))
             self.status_label.config(bg="#dbdb00")
         else:
             # Blink ON

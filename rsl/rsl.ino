@@ -9,11 +9,11 @@
 
 // -------- Pin Defines --------
 #define LED_R 23  // IO3 - Red (digital out)
-#define LED_B 22  // IO4 - Blue (digital out)
+#define LED_B 16  // IO4 - Blue (digital out)
 #define LED_G 21  // IO6 - Green (digital out)
 
-#define WS_PIN 16  // IO16 - WS281x data
-#define NUM_LEDS 30
+#define WS_PIN 22  // IO16 - WS281x data
+#define NUM_LEDS 144
 
 #define LIMIT_PIN 12   // IO12 - get is the gate is closed (digital in)
 #define MANUAL_PIN 13  //IO13 - get if manual is on (digital in)
