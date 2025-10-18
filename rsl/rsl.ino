@@ -8,9 +8,9 @@
 #include <FastLED.h>
 
 // -------- Pin Defines --------
-#define LED_R 3  // IO3 - Red (digital out)
-#define LED_B 5  // IO4 - Blue (digital out)
-#define LED_G 6  // IO6 - Green (digital out)
+#define LED_R 23  // IO3 - Red (digital out)
+#define LED_B 22  // IO4 - Blue (digital out)
+#define LED_G 21  // IO6 - Green (digital out)
 
 #define WS_PIN 16  // IO16 - WS281x data
 #define NUM_LEDS 30
@@ -25,10 +25,14 @@ CRGB leds[NUM_LEDS];
 static String lineBuf;
 uint8_t curR = 0, curG = 0, curB = 0;
 
+// -------- Heartbeat -------------
+unsigned long lastPingTime = 0;
+bool pcAlive = false;
+
 void setDiscreteRGB(uint8_t r, uint8_t g, uint8_t b) {
-  analogWrite(LED_R, r;
-  analogWrite(LED_G, g;
-  analogWrite(LED_B, b;
+  analogWrite(LED_R, r);
+  analogWrite(LED_G, g);
+  analogWrite(LED_B, b);
 }
 
 void setStripRGB(uint8_t r, uint8_t g, uint8_t b) {
@@ -52,7 +56,11 @@ void tryHandleLine(const String& s) {
     b = constrain(b, 0, 255);
     applyColor((uint8_t)r, (uint8_t)g, (uint8_t)b);
     Serial.printf("OK LED %d %d %d\n", r, g, b);
-  } else {
+  } else if (s == "Hallo"){
+    lastPingTime = millis();
+    pcAlive = true;
+  }
+  else {
     unsigned rr, gg, bb;
     if (sscanf(s.c_str(), "HEX #%02x%02x%02x", &rr, &gg, &bb) == 3) {
       applyColor((uint8_t)rr, (uint8_t)gg, (uint8_t)bb);
@@ -72,6 +80,8 @@ void setup() {
   pinMode(LED_R, OUTPUT);
   pinMode(LED_G, OUTPUT);
   pinMode(LED_B, OUTPUT);
+  pinMode(LIMIT_PIN, INPUT);
+  pinMode(MANUAL_PIN, INPUT);
 
   // Initialize off
   setDiscreteRGB(0, 0, 0);
@@ -80,26 +90,51 @@ void setup() {
   FastLED.addLeds<NEOPIXEL, WS_PIN>(leds, NUM_LEDS);
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   FastLED.show();
+  // lastPingTime = millis();
 }
 
 void loop() {
-  if (digitalRead(MANUAL_PIN) == HIGH) {
+  // --- Timeout check ---
+  if (millis() - lastPingTime > 2000) {
+    if (pcAlive == true) {
+      Serial.println("Lost Comms");
+    }
+    pcAlive = false;
+    while (Serial.available()) {
+      char c = (char)Serial.read();
+      if (c == '\n') {
+        String s = lineBuf;
+        if (s.endsWith("\r")) s.remove(s.length() - 1);
+        tryHandleLine(s);
+        lineBuf = "";
+      } else {
+        lineBuf += c;
+        if (lineBuf.length() > 200) lineBuf.remove(0, 200);
+      }
+    }
+  }
+
+  // --- Behavior based on mode ---
+  if ((digitalRead(MANUAL_PIN) == HIGH) || (pcAlive == false)) {
+    // Manual or lost PC connection
     if (digitalRead(LIMIT_PIN) == HIGH)
       applyColor((uint8_t)255, (uint8_t)0, (uint8_t)0);
     else
       applyColor((uint8_t)0, (uint8_t)255, (uint8_t)0);
-  }
-  // Read serial lines (LF-terminated)
-  while (Serial.available()) {
-    char c = (char)Serial.read();
-    if (c == '\n') {
-      String s = lineBuf;
-      if (s.endsWith("\r")) s.remove(s.length() - 1);
-      tryHandleLine(s);
-      lineBuf = "";
-    } else {
-      lineBuf += c;
-      if (lineBuf.length() > 200) lineBuf.remove(0, 200);
+  } 
+  else {
+    // Read serial lines (LF-terminated)
+    while (Serial.available()) {
+      char c = (char)Serial.read();
+      if (c == '\n') {
+        String s = lineBuf;
+        if (s.endsWith("\r")) s.remove(s.length() - 1);
+        tryHandleLine(s);
+        lineBuf = "";
+      } else {
+        lineBuf += c;
+        if (lineBuf.length() > 200) lineBuf.remove(0, 200);
+      }
     }
   }
 }

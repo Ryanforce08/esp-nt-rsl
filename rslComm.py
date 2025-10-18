@@ -5,9 +5,11 @@ from tkinter import ttk, messagebox
 from ntcore import NetworkTableInstance
 import serial
 import serial.tools.list_ports
+import time
 
 SERVER_IP = "127.0.0.1"  # override via CLI arg
 BAUD = 115200
+DEFAULT_PORT = "/dev/ttyUSB0"  # override via UI
 
 # Map of FMSControlData codes → (mode, enabled?, fms_attached?)
 FMS_CODES = {
@@ -80,15 +82,31 @@ class SerialLink:
                 self.close()
             except Exception:
                 pass
+    def send_heartbeat(self):
+        """Send a small 'PING' heartbeat message every second."""
+        if not self.is_open():
+            return
+        try:
+            payload = "Hallo\n".encode("ascii")
+            self.ser.write(payload)
+        except Exception:
+            self.close()
 
 def list_serial_ports():
     return [p.device for p in serial.tools.list_ports.comports()]
 
 class FMSStatusApp:
-    def __init__(self, root, server_ip):
+    def __init__(self, root: tk.Tk, server_ip: str):
         self.root = root
         self.root.title("FMS / Robot Status → ESP32 LED")
-        self.root.geometry("620x300")
+        self.root.geometry("720x300")
+
+        # Blinking setup
+        self.blinking = False
+        self.blink_state = False
+        self.blink_rgb = None
+        self.blink_bg = None
+        self.blink_interval = 1000  # ms (1 sec)
 
         # Fonts
         self.title_font = ("Segoe UI", 14, "bold")
@@ -133,6 +151,9 @@ class FMSStatusApp:
         # Init serial helper
         self.serial = SerialLink()
         self.refresh_ports()
+        if DEFAULT_PORT in list_serial_ports():
+            self.port_var.set(DEFAULT_PORT)
+            self.toggle_connect()
 
         # --- NT4 setup ---
         self.ntinst = NetworkTableInstance.getDefault()
@@ -141,6 +162,8 @@ class FMSStatusApp:
 
         self.fms_table = self.ntinst.getTable("FMSInfo")
         self.fms_control = self.fms_table.getIntegerTopic("FMSControlData").subscribe(0)
+        self.robot_table = self.ntinst.getTable("robot")
+        self.voltage = self.robot_table.getDoubleTopic("voltage").subscribe(12.0)
 
         # Periodic loop
         self.poll()
@@ -188,11 +211,59 @@ class FMSStatusApp:
         except Exception:
             pass
         self.root.destroy()
+    def start_blink(self, rgb_hex, interval=600):
+        """Begin blinking a color without blocking poll()."""
+        rgb = hex_to_rgb(rgb_hex)
+        # If already blinking the same color, skip restarting
+        if self.blinking and self.blink_rgb == rgb:
+            return
+
+        self.blinking = True
+        self.blink_rgb = rgb
+        self.blink_interval = interval
+        self.blink_state = False
+        self._blink_step()
+
+    def stop_blink(self):
+        """Stop blinking and restore normal color control."""
+        if not self.blinking:
+            return
+        self.blinking = False
+        self.blink_state = False
+        if self.blink_rgb:
+            # Restore final color to LED and UI
+            hex_color = '#%02x%02x%02x' % self.blink_rgb
+            self.serial.send_rgb_if_changed(self.blink_rgb)
+            self.status_label.config(bg=hex_color)
+        self.blink_rgb = None
+
+    def _blink_step(self):
+        """Toggle LED and background asynchronously."""
+        if not self.blinking or not self.blink_rgb:
+            return
+
+        if self.blink_state:
+            # Blink OFF
+            self.serial.send_rgb_if_changed((255, 255, 0))
+            self.status_label.config(bg="#dbdb00")
+        else:
+            # Blink ON
+            rgb = self.blink_rgb
+            self.serial.send_rgb_if_changed(rgb)
+            self.status_label.config(bg='#%02x%02x%02x' % rgb)
+
+        self.blink_state = not self.blink_state
+
+        # Schedule next blink step — does NOT block poll()
+        self.root.after(self.blink_interval, self._blink_step)
+
+
 
     # ----- Main poll loop -----
     def poll(self):
         code = self.fms_control.get()
         mode, enabled, attached = decode_fms(code)
+        volt = self.voltage.get()
 
         if mode == "Unknown":
             label_text = "No Data"
@@ -201,19 +272,34 @@ class FMSStatusApp:
             label_text = f"{'ENABLED' if enabled else 'DISABLED'}  ({mode.upper()})"
             bg_hex = UI_COLORS["Disabled"] if not enabled else UI_COLORS.get(mode, UI_COLORS["Unknown"])
 
-        # Update UI
-        self.status_label.config(text=label_text, bg=bg_hex, fg="white")
+        rgb = hex_to_rgb(bg_hex)
+
+        # Handle voltage-based blinking
+        if volt <= 10.0:
+            label_text += " - LOW VOLTAGE!"
+            self.start_blink(bg_hex, 600)
+        else:
+            self.stop_blink()
+            # Only send normal color when not blinking
+            self.serial.send_rgb_if_changed(rgb)
+            self.status_label.config(bg=bg_hex)
+
+        # Always update text info regardless of blinking
+        self.status_label.config(text=label_text, fg="white")
         self.detail.config(
-            text=f"FMS Attached: {'Yes' if attached else 'No'}    |    FMSControlData: {code}"
+            text=f"FMS Attached: {'Yes' if attached else 'No'} | FMSControlData: {code}"
         )
 
-        # Send RGB to ESP32 if changed
-        rgb = hex_to_rgb(bg_hex)
-        self.serial.send_rgb_if_changed(rgb)
-
-        # Flush NT and schedule again
+        # Keep poll loop running continuously
         self.ntinst.flush()
-        self.root.after(100, self.poll)  # ~10 Hz
+        
+        # Send heartbeat every ~1s
+        now = time.time()
+        if not hasattr(self, "_last_ping") or now - self._last_ping > 1.0:
+            self.serial.send_heartbeat()
+            self._last_ping = now
+
+        self.root.after(100, self.poll)
 
 def main():
     server = SERVER_IP
