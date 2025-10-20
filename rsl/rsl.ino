@@ -8,9 +8,9 @@
 #include <FastLED.h>
 
 // -------- Pin Defines --------
-#define LED_R 23  // IO3 - Red (digital out)
-#define LED_B 16  // IO4 - Blue (digital out)
-#define LED_G 21  // IO6 - Green (digital out)
+#define LED_R 13  // IO3 - Red (digital out)
+#define LED_B 12  // IO4 - Blue (digital out)
+#define LED_G 14  // IO6 - Green (digital out)
 
 #define WS_PIN 22  // IO16 - WS281x data
 #define NUM_LEDS 144

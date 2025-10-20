@@ -27,7 +27,7 @@ FMS_CODES = {
 
 # UI color palette (hex) matching the big status label background
 UI_COLORS = {
-    "Unknown": "#808080",
+    "Unknown": "#000000",
     "Disabled": "#00ff00",
     "Auto": "#0000ff",
     "Test": "#f9a825",
@@ -244,7 +244,6 @@ class FMSStatusApp:
 
         if self.blink_state:
             # Blink OFF
-            print("Blink OFF")
             self.serial.send_rgb_if_changed(rgb=(255, 255, 0))
             self.status_label.config(bg="#dbdb00")
         else:
