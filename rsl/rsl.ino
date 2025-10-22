@@ -18,6 +18,8 @@
 #define LIMIT_PIN 12   // IO12 - get is the gate is closed (digital in)
 #define MANUAL_PIN 13  //IO13 - get if manual is on (digital in)
 
+double manual_brightness = 0.5;
+
 // -------- WS281x setup --------
 CRGB leds[NUM_LEDS];
 
@@ -48,27 +50,50 @@ void applyColor(uint8_t r, uint8_t g, uint8_t b) {
   setStripRGB(r, g, b);
 }
 
-void tryHandleLine(const String& s) {
+struct Command {
+  const char* name;
+  void (*handler)(const String&);
+};
+
+void cmdLED(const String& s) {
   int r, g, b;
-  if (sscanf(s.c_str(), "LED %d %d %d", &r, &g, &b) == 3) {
-    r = constrain(r, 0, 255);
-    g = constrain(g, 0, 255);
-    b = constrain(b, 0, 255);
-    applyColor((uint8_t)r, (uint8_t)g, (uint8_t)b);
-    Serial.printf("OK LED %d %d %d\n", r, g, b);
-  } else if (s == "Hallo"){
-    lastPingTime = millis();
-    pcAlive = true;
-  }
-  else {
-    unsigned rr, gg, bb;
-    if (sscanf(s.c_str(), "HEX #%02x%02x%02x", &rr, &gg, &bb) == 3) {
-      applyColor((uint8_t)rr, (uint8_t)gg, (uint8_t)bb);
-      Serial.printf("OK HEX #%02X%02X%02X\n", rr, gg, bb);
-    } else if (s.length() > 0) {
-      Serial.println("ERR Unknown command");
+  if (sscanf(s.c_str(), "LED %d %d %d", &r, &g, &b) == 3)
+    setStripRGB(r, g, b);
+}
+
+void cmdHEX(const String& s) {
+  unsigned rr, gg, bb;
+  if (sscanf(s.c_str(), "HEX #%02x%02x%02x", &rr, &gg, &bb) == 3)
+    setStripRGB(rr, gg, bb);
+}
+
+void cmdHallo(const String& s) {
+  lastPingTime = millis();
+  pcAlive = true;
+}
+
+void cmdRainbow(const String& s) {
+  fill_rainbow(leds, NUM_LEDS,0);
+}
+
+
+Command commands[] = {
+  {"LED", cmdLED},
+  {"HEX", cmdHEX},
+  {"Hallo", cmdHallo},
+  {"RAINBOW", cmdRainbow},
+};
+
+void tryHandleLine(const String& s) {
+  Serial.println(s);
+  for (auto& cmd : commands) {
+    if (s.startsWith(cmd.name)) {
+      cmd.handler(s);
+      Serial.printf("OK %s\n", cmd.name);
+      return;
     }
   }
+  Serial.println("ERR Unknown command");
 }
 
 void setup() {
@@ -118,9 +143,9 @@ void loop() {
   if ((digitalRead(MANUAL_PIN) == HIGH) || (pcAlive == false)) {
     // Manual or lost PC connection
     if (digitalRead(LIMIT_PIN) == HIGH)
-      applyColor((uint8_t)255, (uint8_t)0, (uint8_t)0);
+      applyColor((uint8_t)255 * manual_brightness, (uint8_t)0, (uint8_t)0);
     else
-      applyColor((uint8_t)0, (uint8_t)255, (uint8_t)0);
+      applyColor((uint8_t)0, (uint8_t)255 * manual_brightness, (uint8_t)0);
   } 
   else {
     // Read serial lines (LF-terminated)

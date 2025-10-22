@@ -1,11 +1,9 @@
-# tk_fms_status_serial.py
 import sys
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ntcore import NetworkTableInstance
-import serial
-import serial.tools.list_ports
 import time
+from serialHelper import SerialLink
 
 SERVER_IP = "127.0.0.1"  # override via CLI arg
 BAUD = 115200
@@ -30,7 +28,7 @@ UI_COLORS = {
     "Unknown": "#000000",
     "Disabled": "#00ff00",
     "Auto": "#0000ff",
-    "Test": "#f9a825",
+    "Test": "#800080",
     "Teleop": "#ff0000",
 }
 
@@ -43,81 +41,31 @@ def decode_fms(code: int):
         return FMS_CODES[code]
     return ("Unknown", False, False)
 
-class SerialLink:
-    def __init__(self):
-        self.ser = None
-        self.last_rgb = None  # (r,g,b) last transmitted
 
-    def open(self, port, baud=BAUD):
-        self.close()
-        self.ser = serial.Serial(port=port, baudrate=baud, timeout=0)
-        self.last_rgb = None
-
-    def close(self):
-        if self.ser and self.ser.is_open:
-            try:
-                self.ser.close()
-            except Exception:
-                pass
-        self.ser = None
-        self.last_rgb = None
-
-    def is_open(self):
-        return self.ser is not None and self.ser.is_open
-
-    def send_rgb_if_changed(self, rgb):
-        """Send only when the RGB changed to reduce spam."""
-        if not self.is_open():
-            return
-        if self.last_rgb == rgb:
-            return
-        r, g, b = rgb
-        try:
-            payload = f"LED {r} {g} {b}\n".encode("ascii")
-            self.ser.write(payload)
-            self.last_rgb = rgb
-        except Exception:
-            # If write fails, drop the link silently; UI will show disconnected on next check
-            try:
-                self.close()
-            except Exception:
-                pass
-    def send_heartbeat(self):
-        """Send a small 'PING' heartbeat message every second."""
-        if not self.is_open():
-            return
-        try:
-            payload = "Hallo\n".encode("ascii")
-            self.ser.write(payload)
-        except Exception:
-            self.close()
-
-def list_serial_ports():
-    return [p.device for p in serial.tools.list_ports.comports()]
-
+# -------- FMSStatusApp Class --------
 class FMSStatusApp:
     def __init__(self, root: tk.Tk, server_ip: str):
         self.root = root
         self.root.title("FMS / Robot Status → ESP32 LED")
-        self.root.geometry("720x300")
+        self.root.geometry("720x350")
 
-        # Blinking setup
-        self.blinking = False
-        self.blink_state = False
-        self.blink_rgb = None
-        self.blink_bg = None
-        self.blink_interval = 1000  # ms (1 sec)
-
-        # Fonts
         self.title_font = ("Segoe UI", 14, "bold")
         self.big_font = ("Segoe UI", 28, "bold")
         self.small_font = ("Segoe UI", 11)
+        self.brightness = 0.5
+
+        self.blinking = False
+        self.blink_state = False
+        self.blink_rgb = None
+        self.blink_hex = None
+        self.blink_interval = 1.0  # seconds
+        self.last_time = 0.0
 
         # --- Header ---
         header = tk.Label(root, text="NetworkTables: FMSInfo", font=self.title_font)
         header.pack(pady=(10, 4))
 
-        # --- Status label ---
+        # --- Status Label ---
         self.status_label = tk.Label(root, text="Connecting…", font=self.big_font, width=28, height=2)
         self.status_label.pack(pady=6)
 
@@ -125,11 +73,11 @@ class FMSStatusApp:
         self.detail = tk.Label(root, text="—", font=self.small_font)
         self.detail.pack()
 
-        # --- NT server display ---
+        # --- Server Label ---
         self.server_lbl = tk.Label(root, text=f"NT Server: {server_ip}", font=self.small_font, fg="#666")
         self.server_lbl.pack(pady=(6, 0))
 
-        # --- Serial controls ---
+        # --- Serial Frame ---
         ser_frame = ttk.LabelFrame(root, text="ESP32 Serial Link (WS2812 on IO16)")
         ser_frame.pack(fill="x", padx=10, pady=10)
 
@@ -145,121 +93,100 @@ class FMSStatusApp:
 
         self.conn_label = ttk.Label(ser_frame, text="Disconnected", foreground="#B00020")
         self.conn_label.grid(row=0, column=3, padx=8, pady=6, sticky="w")
-
         ser_frame.grid_columnconfigure(4, weight=1)
 
-        # Init serial helper
-        self.serial = SerialLink()
+        # --- Brightness ---
+        self.bright_frame = ttk.LabelFrame(root, text=f"LED Brightness: {self.brightness:.2f}")
+        self.bright_frame.pack(fill="x", padx=10, pady=6)
+
+        def on_brightness_change(val):
+            self.brightness = float(val) / 100.0
+            self.bright_frame.config(text=f"LED Brightness: {self.brightness:.2f}")
+            if hasattr(self, "serial"):
+                self.serial.set_brightness(self.brightness)
+
+        self.brightness_slider = ttk.Scale(
+            self.bright_frame, from_=0, to=100, orient="horizontal",
+            command=on_brightness_change
+        )
+        self.brightness_slider.set(self.brightness * 100)
+        self.brightness_slider.pack(fill="x", padx=10, pady=8)
+
+        # --- Initialize SerialLink ---
+        self.serial = SerialLink(
+            baud=BAUD,
+            default_port=DEFAULT_PORT,
+            heartbeat_interval=1.0,
+            heartbeat_message="Hallo",
+            auto_reconnect=True,
+            tk_root=self.root,
+            brightness=self.brightness
+        )
+
+        self.serial.on_connect = self._on_serial_connect
+        self.serial.on_disconnect = self._on_serial_disconnect
+        self.serial.on_reconnect = self._on_serial_reconnect
+
+        self.serial.start_heartbeat()
+
         self.refresh_ports()
-        if DEFAULT_PORT in list_serial_ports():
+        if self.port_var.get() not in self.serial.list_ports() and DEFAULT_PORT in self.serial.list_ports():
             self.port_var.set(DEFAULT_PORT)
-            self.toggle_connect()
+        elif self.port_var.get() not in self.serial.list_ports():
+            self.port_var.set("")
 
-        # --- NT4 setup ---
-        self.ntinst = NetworkTableInstance.getDefault()
-        self.ntinst.setServer(server_ip)
-        self.ntinst.startClient4("TkFMSStatus")
+        # --- NetworkTables Setup ---
+        self.init_nt(server_ip)
 
-        self.fms_table = self.ntinst.getTable("FMSInfo")
-        self.fms_control = self.fms_table.getIntegerTopic("FMSControlData").subscribe(0)
-        self.robot_table = self.ntinst.getTable("robot")
-        self.voltage = self.robot_table.getDoubleTopic("voltage").subscribe(12.0)
-
-        # Periodic loop
-        self.poll()
+        # Start poll loop
+        self.root.after(100, self.poll)
 
         # Clean shutdown
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    # ----- Serial UI helpers -----
+    # --- Serial callbacks ---
+    def _on_serial_connect(self):
+        self.connect_btn.config(text="Disconnect")
+        self.conn_label.config(text=f"Connected: {self.serial.ser.port}", foreground="#2E7D32")
+
+    def _on_serial_disconnect(self):
+        self.connect_btn.config(text="Connect")
+        self.conn_label.config(text="Disconnected", foreground="#B00020")
+
+    def _on_serial_reconnect(self):
+        self.conn_label.config(text=f"Reconnected: {self.serial.ser.port}", foreground="#2E7D32")
+
+    # --- Refresh ports ---
     def refresh_ports(self):
-        ports = list_serial_ports()
+        ports = self.serial.list_ports()
         self.port_menu["values"] = ports
         if ports and (self.port_var.get() not in ports):
             self.port_var.set(ports[0])
         elif not ports:
             self.port_var.set("")
 
+    # --- Connect/Disconnect ---
     def toggle_connect(self):
         if self.serial.is_open():
             self.serial.close()
-            self.connect_btn.config(text="Connect")
-            self.conn_label.config(text="Disconnected", foreground="#B00020")
-            return
-
-        port = self.port_var.get().strip()
-        if not port:
-            messagebox.showwarning("Serial", "Select a serial port first.")
-            return
-        try:
-            self.serial.open(port, BAUD)
-            self.connect_btn.config(text="Disconnect")
-            self.conn_label.config(text=f"Connected: {port}", foreground="#2E7D32")
-        except Exception as e:
-            messagebox.showerror("Serial", f"Failed to open {port}\n{e}")
-            self.serial.close()
-            self.connect_btn.config(text="Connect")
-            self.conn_label.config(text="Disconnected", foreground="#B00020")
-
-    def on_close(self):
-        try:
-            self.serial.close()
-        except Exception:
-            pass
-        try:
-            self.ntinst.stopClient()
-        except Exception:
-            pass
-        self.root.destroy()
-    def start_blink(self, rgb_hex, interval=600):
-        """Begin blinking a color without blocking poll()."""
-        rgb = hex_to_rgb(rgb_hex)
-        # If already blinking the same color, skip restarting
-        if self.blinking and self.blink_rgb == rgb:
-            return
-
-        self.blinking = True
-        self.blink_rgb = rgb
-        self.blink_interval = interval
-        self.blink_state = False
-        self._blink_step()
-
-    def stop_blink(self):
-        """Stop blinking and restore normal color control."""
-        if not self.blinking:
-            return
-        self.blinking = False
-        self.blink_state = False
-        if self.blink_rgb:
-            # Restore final color to LED and UI
-            hex_color = '#%02x%02x%02x' % self.blink_rgb
-            self.serial.send_rgb_if_changed(self.blink_rgb)
-            self.status_label.config(bg=hex_color)
-        self.blink_rgb = None
-
-    def _blink_step(self):
-        """Toggle LED and background asynchronously."""
-        if not self.blinking or not self.blink_rgb:
-            return
-
-        if self.blink_state:
-            # Blink OFF
-            self.serial.send_rgb_if_changed(rgb=(255, 255, 0))
-            self.status_label.config(bg="#dbdb00")
         else:
-            # Blink ON
-            rgb = self.blink_rgb
-            self.serial.send_rgb_if_changed(rgb)
-            self.status_label.config(bg='#%02x%02x%02x' % rgb)
+            port = self.port_var.get().strip()
+            if not port:
+                messagebox.showwarning("Serial", "Select a serial port first.")
+                return
+            self.serial.open(port)
 
-        self.blink_state = not self.blink_state
+    # --- NetworkTables Setup ---
+    def init_nt(self, server_ip):
+        self.ntinst = NetworkTableInstance.getDefault()
+        self.ntinst.setServer(server_ip)
+        self.ntinst.startClient4("TkFMSStatus")
+        self.fms_table = self.ntinst.getTable("FMSInfo")
+        self.fms_control = self.fms_table.getIntegerTopic("FMSControlData").subscribe(0)
+        self.robot_table = self.ntinst.getTable("robot")
+        self.voltage = self.robot_table.getDoubleTopic("voltage").subscribe(12.0)
 
-        # Schedule next blink step — does NOT block poll()
-        self.root.after(self.blink_interval, self._blink_step)
-
-
-
-    # ----- Main poll loop -----
+    # --- Poll Loop ---
     def poll(self):
         code = self.fms_control.get()
         mode, enabled, attached = decode_fms(code)
@@ -274,33 +201,78 @@ class FMSStatusApp:
 
         rgb = hex_to_rgb(bg_hex)
 
-        # Handle voltage-based blinking
+        # Voltage blinking
         if volt <= 10.0:
             label_text += " - LOW VOLTAGE!"
-            self.start_blink(bg_hex, 600)
-        else:
+            if not self.blinking:
+                self.start_blink(rgb)
+        elif self.blinking and volt > 10.0:
             self.stop_blink()
-            # Only send normal color when not blinking
+        elif not self.blinking:
             self.serial.send_rgb_if_changed(rgb)
-            self.status_label.config(bg=bg_hex)
+        if self.blinking:
+            bg_hex = self.blink_hex
 
-        # Always update text info regardless of blinking
-        self.status_label.config(text=label_text, fg="white")
-        self.detail.config(
-            text=f"FMS Attached: {'Yes' if attached else 'No'} | FMSControlData: {code}"
-        )
+        self.status_label.config(text=label_text, fg="white",background=bg_hex)
+        self.detail.config(text=f"FMS Attached: {'Yes' if attached else 'No'} | FMSControlData: {code}")
 
-        # Keep poll loop running continuously
         self.ntinst.flush()
-        
-        # Send heartbeat every ~1s
-        now = time.time()
-        if not hasattr(self, "_last_ping") or now - self._last_ping > 1.0:
-            self.serial.send_heartbeat()
-            self._last_ping = now
-
         self.root.after(100, self.poll)
 
+    # --- Blinking Logic ---
+    def start_blink(self, rgb):
+        if self.blinking and self.blink_rgb == rgb:
+            return
+        self.blinking = True
+        self.blink_rgb = rgb
+        self.blink_state = False
+        self._blink_step()
+
+    def stop_blink(self):
+        if not self.blinking:
+            return
+        self.blinking = False
+        self.blink_state = False
+        if self.blink_rgb:
+            self.serial.send_rgb_if_changed(self.blink_rgb)
+        self.blink_rgb = None
+
+    def _blink_step(self):
+        if not self.blinking or not self.blink_rgb:
+            return
+        now = time.time()
+        if now - self.last_time < self.blink_interval:
+            self.root.after(50, self._blink_step)
+            return
+        self.last_time = now
+        if self.blink_state:
+            self.serial.send_rgb_if_changed((255, 255, 0))
+            self.blink_hex = "#ffff00"
+        else:
+            self.serial.send_rgb_if_changed(self.blink_rgb)
+            self.blink_hex = f"#{self.blink_rgb[0]:02x}{self.blink_rgb[1]:02x}{self.blink_rgb[2]:02x}"
+        self.blink_state = not self.blink_state
+        self.root.after(50, self._blink_step)
+
+    # --- Clean Shutdown ---
+    def on_close(self):
+        try:
+            self.serial.stop_heartbeat()
+        except Exception:
+            pass
+        try:
+            self.serial.close()
+        except Exception:
+            pass
+        try:
+            self.ntinst.stopClient()
+        except Exception:
+            pass
+
+        self.root.destroy()
+
+
+# --- Main Entry ---
 def main():
     server = SERVER_IP
     if len(sys.argv) >= 2:
@@ -308,6 +280,7 @@ def main():
     root = tk.Tk()
     FMSStatusApp(root, server)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
