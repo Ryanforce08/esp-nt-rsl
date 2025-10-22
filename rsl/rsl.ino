@@ -85,7 +85,6 @@ Command commands[] = {
 };
 
 void tryHandleLine(const String& s) {
-  Serial.println(s);
   for (auto& cmd : commands) {
     if (s.startsWith(cmd.name)) {
       cmd.handler(s);

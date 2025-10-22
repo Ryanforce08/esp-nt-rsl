@@ -116,8 +116,8 @@ class FMSStatusApp:
         self.serial = SerialLink(
             baud=BAUD,
             default_port=DEFAULT_PORT,
-            heartbeat_interval=1.0,
-            heartbeat_message="Hallo",
+            heartbeat_interval=0.5,
+            heartbeat_message="Hallo\n",
             auto_reconnect=True,
             tk_root=self.root,
             brightness=self.brightness
@@ -126,8 +126,6 @@ class FMSStatusApp:
         self.serial.on_connect = self._on_serial_connect
         self.serial.on_disconnect = self._on_serial_disconnect
         self.serial.on_reconnect = self._on_serial_reconnect
-
-        self.serial.start_heartbeat()
 
         self.refresh_ports()
         if self.port_var.get() not in self.serial.list_ports() and DEFAULT_PORT in self.serial.list_ports():
@@ -148,13 +146,23 @@ class FMSStatusApp:
     def _on_serial_connect(self):
         self.connect_btn.config(text="Disconnect")
         self.conn_label.config(text=f"Connected: {self.serial.ser.port}", foreground="#2E7D32")
+        self.serial.start_heartbeat()
+        self.serial.send_rgb(self.rgb)  # reset LEDs on connect
+        self.serial.send_rgb(self.rgb)  # reset LEDs on connect
+        self.serial.send_rgb(self.rgb)  # reset LEDs on connect
 
     def _on_serial_disconnect(self):
         self.connect_btn.config(text="Connect")
         self.conn_label.config(text="Disconnected", foreground="#B00020")
+        self.serial.stop_heartbeat()
 
     def _on_serial_reconnect(self):
         self.conn_label.config(text=f"Reconnected: {self.serial.ser.port}", foreground="#2E7D32")
+        self.serial.start_heartbeat()
+        time.sleep(0.5)
+        self.serial.send_rgb(self.rgb)  # reset LEDs on connect
+        self.serial.send_rgb(self.rgb)  # reset LEDs on connect
+        self.serial.send_rgb(self.rgb)  # reset LEDs on connect
 
     # --- Refresh ports ---
     def refresh_ports(self):
@@ -200,6 +208,7 @@ class FMSStatusApp:
             bg_hex = UI_COLORS["Disabled"] if not enabled else UI_COLORS.get(mode, UI_COLORS["Unknown"])
 
         rgb = hex_to_rgb(bg_hex)
+        self.rgb = rgb
 
         # Voltage blinking
         if volt <= 10.0:
@@ -250,7 +259,7 @@ class FMSStatusApp:
             self.blink_hex = "#ffff00"
         else:
             self.serial.send_rgb_if_changed(self.blink_rgb)
-            self.blink_hex = f"#{self.blink_rgb[0]:02x}{self.blink_rgb[1]:02x}{self.blink_rgb[2]:02x}"
+            
         self.blink_state = not self.blink_state
         self.root.after(50, self._blink_step)
 

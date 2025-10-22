@@ -117,8 +117,17 @@ class SerialLink:
         if ok:
             self.last_rgb = scaled_rgb
         return ok
+    
+    def send_rgb(self, rgb):
+        """Send RGB color scaled by brightness."""
+        scaled_rgb = tuple(max(0, min(255, int(c * self.brightness))) for c in rgb)
+        ok = self.send_message(f"LED {scaled_rgb[0]} {scaled_rgb[1]} {scaled_rgb[2]}")
+        if ok:
+            self.last_rgb = scaled_rgb
+        return ok
 
     def send_heartbeat(self):
+        print("[SerialLink] Sending heartbeat")
         return self.send_message(self.heartbeat_message, only_if_changed=False)
 
     # -------- Heartbeat Thread --------

@@ -7,7 +7,7 @@ import time
 from serialHelper import SerialLink
 
 # ---------- Configuration ----------
-PORT = "/dev/ttyUSB0"  # Change to your serial port
+PORT = "/dev/ttyUSB2"  # Change to your serial port
 BAUD = 115200
 HEARTBEAT_INTERVAL = 1.0  # seconds
 SEND_INTERVAL = 0.05  # seconds
@@ -96,7 +96,7 @@ class ColorPickerApp:
         """Continuously send the current color to ESP32."""
         while self.running:
             r, g, b = self.current_rgb
-            ser.send_rgb_if_changed((r,g,b))
+            ser.send_rgb_if_changed((255,255,255))
             time.sleep(SEND_INTERVAL)
 
 
