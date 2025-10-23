@@ -31,6 +31,18 @@ uint8_t curR = 0, curG = 0, curB = 0;
 unsigned long lastPingTime = 0;
 bool pcAlive = false;
 
+String curr_led = "RGBIS";
+
+void updateCurrentRGB(int r,int g, int b) {
+  String s = "RGBIS ";
+  s += r;
+  s += " ";
+  s += g;
+  s += " ";
+  s += b;
+  curr_led = s;
+}
+
 void setDiscreteRGB(uint8_t r, uint8_t g, uint8_t b) {
   analogWrite(LED_R, r);
   analogWrite(LED_G, g);
@@ -38,6 +50,8 @@ void setDiscreteRGB(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 void setStripRGB(uint8_t r, uint8_t g, uint8_t b) {
+  if ((digitalRead(MANUAL_PIN) == LOW))
+    updateCurrentRGB(r,g,b);
   fill_solid(leds, NUM_LEDS, CRGB(r, g, b));
   FastLED.show();
 }
@@ -76,23 +90,43 @@ void cmdRainbow(const String& s) {
   fill_rainbow(leds, NUM_LEDS,0);
 }
 
+void cmdGetRGB(const String& s) {
+  Serial.println(curr_led);
+}
+
 
 Command commands[] = {
   {"LED", cmdLED},
   {"HEX", cmdHEX},
   {"Hallo", cmdHallo},
   {"RAINBOW", cmdRainbow},
+  {"GETRGB", cmdGetRGB}
 };
 
 void tryHandleLine(const String& s) {
   for (auto& cmd : commands) {
     if (s.startsWith(cmd.name)) {
       cmd.handler(s);
-      Serial.printf("OK %s\n", cmd.name);
+      // Serial.printf("OK %s\n", cmd.name);
       return;
     }
   }
   Serial.println("ERR Unknown command");
+}
+
+void readSerial() {
+  while (Serial.available()) {
+      char c = (char)Serial.read();
+      if (c == '\n') {
+        String s = lineBuf;
+        if (s.endsWith("\r")) s.remove(s.length() - 1);
+        tryHandleLine(s);
+        lineBuf = "";
+      } else {
+        lineBuf += c;
+        if (lineBuf.length() > 200) lineBuf.remove(0, 200);
+      }
+  }
 }
 
 void setup() {
@@ -124,41 +158,27 @@ void loop() {
       Serial.println("Lost Comms");
     }
     pcAlive = false;
-    while (Serial.available()) {
-      char c = (char)Serial.read();
-      if (c == '\n') {
-        String s = lineBuf;
-        if (s.endsWith("\r")) s.remove(s.length() - 1);
-        tryHandleLine(s);
-        lineBuf = "";
-      } else {
-        lineBuf += c;
-        if (lineBuf.length() > 200) lineBuf.remove(0, 200);
-      }
-    }
+    readSerial();;
   }
 
   // --- Behavior based on mode ---
   if ((digitalRead(MANUAL_PIN) == HIGH) || (pcAlive == false)) {
     // Manual or lost PC connection
-    if (digitalRead(LIMIT_PIN) == HIGH)
-      applyColor((uint8_t)255 * manual_brightness, (uint8_t)0, (uint8_t)0);
-    else
-      applyColor((uint8_t)0, (uint8_t)255 * manual_brightness, (uint8_t)0);
+    if (digitalRead(LIMIT_PIN) == HIGH) {
+      if ((pcAlive == false) || (digitalRead(MANUAL_PIN) == HIGH)) {
+        setStripRGB((uint8_t)255 * manual_brightness, (uint8_t)0, (uint8_t)0);
+      }
+
+    }
+    else {
+      setStripRGB((uint8_t)0, (uint8_t)255 * manual_brightness, (uint8_t)0);
+      if ((pcAlive == true) || (digitalRead(MANUAL_PIN) == LOW)) {
+        return;
+      }
+    }
   } 
   else {
     // Read serial lines (LF-terminated)
-    while (Serial.available()) {
-      char c = (char)Serial.read();
-      if (c == '\n') {
-        String s = lineBuf;
-        if (s.endsWith("\r")) s.remove(s.length() - 1);
-        tryHandleLine(s);
-        lineBuf = "";
-      } else {
-        lineBuf += c;
-        if (lineBuf.length() > 200) lineBuf.remove(0, 200);
-      }
-    }
+    readSerial();
   }
 }

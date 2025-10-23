@@ -2,6 +2,8 @@ import serial
 import serial.tools.list_ports
 import threading
 import time
+import json
+import os
 
 class SerialLink:
     """
@@ -30,6 +32,18 @@ class SerialLink:
         self.on_connect = None
         self.on_disconnect = None
         self.on_reconnect = None
+
+        self.config_path = os.path.join(os.path.join("./.vscode"), "rsl.json")
+        try:
+            if os.path.exists(self.config_path):
+                print(f"[SerialLink] Loading brightness from config: {self.config_path}")
+                with open(self.config_path, "r") as f:
+                    config = json.load(f)
+                self.brightness = config["Brightness"]
+                print(f"[SerialLink] Loaded brightness: {self.brightness}")
+        except Exception as e:
+            print(f"[SerialLink] Failed to load brightness from config: {e}")
+
 
     # -------- Connection Management --------
     def list_ports(self):
@@ -74,10 +88,24 @@ class SerialLink:
     def set_brightness(self, value):
         """Set brightness (0.0–1.0) and update last sent RGB if any."""
         self.brightness = max(0.0, min(1.0, value))
+        self.update_brightness_from_config(self.brightness)
         if self.last_rgb:
             scaled = tuple(int(c * self.brightness) for c in self.last_rgb)
             self.send_rgb_if_changed(scaled)
+    
+    def update_brightness_from_config(self,brightness):
+        """Load brightness from config file if it exists."""
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r") as f:
+                    config = json.load(f)
+                    config["Brightness"] = brightness
+                with open(self.config_path, "w") as f:
+                    json.dump(config, f, indent=4)
+        except Exception as e:
+            print(f"[SerialLink] Failed to load brightness from config: {e}")
 
+        
     # -------- Message Sending --------
     def send_message(self, message, only_if_changed=False):
         if not self.is_open():
@@ -127,8 +155,32 @@ class SerialLink:
         return ok
 
     def send_heartbeat(self):
-        print("[SerialLink] Sending heartbeat")
+        # print("[SerialLink] Sending heartbeat")
         return self.send_message(self.heartbeat_message, only_if_changed=False)
+    
+    def get_rgb(self):
+        """Request current RGB from the device."""
+        if not self.is_open() and self.auto_reconnect:
+            self.try_reconnect()
+        if not self.is_open():
+            return None
+        try:
+            self.ser.reset_input_buffer()
+            self.send_message("GETRGB")
+            time.sleep(0.3)  # wait for response
+            line = self.ser.readline().decode("ascii").strip()
+            if line.startswith("RGBIS"):
+                parts = line.split()
+                if len(parts) == 4:
+                    r = int(parts[1])
+                    g = int(parts[2])
+                    b = int(parts[3])
+                    return (r, g, b)
+            return None
+        except Exception as e:
+            print(f"[SerialLink] Read failed: {e}")
+            self.close()
+            return None
 
     # -------- Heartbeat Thread --------
     def start_heartbeat(self):
@@ -137,14 +189,20 @@ class SerialLink:
         self._hb_stop.clear()
         self._hb_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._hb_thread.start()
+        if self.last_rgb is not None:
+            self.send_rgb(self.last_rgb)
 
     def stop_heartbeat(self):
-        self._hb_stop.set()
+        self._hb_stop.clear()
 
     def _heartbeat_loop(self):
         while not self._hb_stop.is_set():
             if self.is_open():
                 self.send_heartbeat()
+                if self.last_rgb is not None:
+                    curr = self.get_rgb()
+                    if not (self.last_rgb == curr):
+                        self.send_rgb_if_changed(self.last_rgb)
             elif self.auto_reconnect:
                 if self.try_reconnect():
                     self._tk_callback(self.on_reconnect)

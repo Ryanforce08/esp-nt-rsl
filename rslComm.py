@@ -4,6 +4,8 @@ from tkinter import ttk, messagebox
 from ntcore import NetworkTableInstance
 import time
 from serialHelper import SerialLink
+import os
+import json
 
 SERVER_IP = "127.0.0.1"  # override via CLI arg
 BAUD = 115200
@@ -61,6 +63,17 @@ class FMSStatusApp:
         self.blink_interval = 1.0  # seconds
         self.last_time = 0.0
 
+        self.config_path = os.path.join(os.path.join("./.vscode"), "rsl.json")
+        try:
+            if os.path.exists(self.config_path):
+                print(f"[SerialLink] Loading brightness from config: {self.config_path}")
+                with open(self.config_path, "r") as f:
+                    config = json.load(f)
+                self.brightness = config["Brightness"]
+                print(f"[SerialLink] Loaded brightness: {self.brightness}")
+        except Exception as e:
+            print(f"[SerialLink] Failed to load brightness from config: {e}")
+
         # --- Header ---
         header = tk.Label(root, text="NetworkTables: FMSInfo", font=self.title_font)
         header.pack(pady=(10, 4))
@@ -78,7 +91,7 @@ class FMSStatusApp:
         self.server_lbl.pack(pady=(6, 0))
 
         # --- Serial Frame ---
-        ser_frame = ttk.LabelFrame(root, text="ESP32 Serial Link (WS2812 on IO16)")
+        ser_frame = ttk.LabelFrame(root, text="ESP32 Serial Link (WS2812 on IO22)")
         ser_frame.pack(fill="x", padx=10, pady=10)
 
         self.port_var = tk.StringVar()
@@ -148,8 +161,7 @@ class FMSStatusApp:
         self.conn_label.config(text=f"Connected: {self.serial.ser.port}", foreground="#2E7D32")
         self.serial.start_heartbeat()
         self.serial.send_rgb(self.rgb)  # reset LEDs on connect
-        self.serial.send_rgb(self.rgb)  # reset LEDs on connect
-        self.serial.send_rgb(self.rgb)  # reset LEDs on connect
+
 
     def _on_serial_disconnect(self):
         self.connect_btn.config(text="Connect")
@@ -158,10 +170,9 @@ class FMSStatusApp:
 
     def _on_serial_reconnect(self):
         self.conn_label.config(text=f"Reconnected: {self.serial.ser.port}", foreground="#2E7D32")
+        self.serial.stop_heartbeat()
+        time.sleep(0.1)
         self.serial.start_heartbeat()
-        time.sleep(0.5)
-        self.serial.send_rgb(self.rgb)  # reset LEDs on connect
-        self.serial.send_rgb(self.rgb)  # reset LEDs on connect
         self.serial.send_rgb(self.rgb)  # reset LEDs on connect
 
     # --- Refresh ports ---
