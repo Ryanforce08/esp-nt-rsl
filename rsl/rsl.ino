@@ -8,7 +8,7 @@
 #include <FastLED.h>
 
 // -------- Pin Defines --------
-#define LED_R 13  // IO3 - Red (digital out)
+#define LED_R 27  // IO3 - Red (digital out)
 #define LED_B 12  // IO4 - Blue (digital out)
 #define LED_G 14  // IO6 - Green (digital out)
 
@@ -17,9 +17,13 @@
 
 #define LIMIT_PIN 12   // IO12 - get is the gate is closed (digital in)
 #define MANUAL_PIN 13  //IO13 - get if manual is on (digital in)
+#define VOLUME_PIN 32
 
-double manual_brightness = 0.5;
+const int sampleCount = 9;  // Number of samples for median filter
+const float alpha = 0.1;    // Smoothing factor (0.0–1.0)
+float smoothedValue = 0;
 
+double brightness = 0.5;
 // -------- WS281x setup --------
 CRGB leds[NUM_LEDS];
 
@@ -44,9 +48,9 @@ void updateCurrentRGB(int r,int g, int b) {
 }
 
 void setDiscreteRGB(uint8_t r, uint8_t g, uint8_t b) {
-  analogWrite(LED_R, r);
-  analogWrite(LED_G, g);
-  analogWrite(LED_B, b);
+  // analogWrite(LED_R, r);
+  // analogWrite(LED_G, g);
+  // analogWrite(LED_B, b);
 }
 
 void setStripRGB(uint8_t r, uint8_t g, uint8_t b) {
@@ -128,6 +132,28 @@ void readSerial() {
       }
   }
 }
+int medianFilter() {
+  int readings[sampleCount];
+  for (int i = 0; i < sampleCount; i++) {
+    readings[i] = analogRead(VOLUME_PIN);
+    delayMicroseconds(500);
+  }
+
+  // Sort the readings (simple bubble sort)
+  for (int i = 0; i < sampleCount - 1; i++) {
+    for (int j = i + 1; j < sampleCount; j++) {
+      if (readings[j] < readings[i]) {
+        int temp = readings[i];
+        readings[i] = readings[j];
+        readings[j] = temp;
+      }
+    }
+  }
+
+  // Return median (middle value)
+  return readings[sampleCount / 2];
+}
+
 
 void setup() {
   Serial.begin(115200);
@@ -148,6 +174,7 @@ void setup() {
   FastLED.addLeds<NEOPIXEL, WS_PIN>(leds, NUM_LEDS);
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   FastLED.show();
+  // analogSetAttenuation(ADC_11db);
   // lastPingTime = millis();
 }
 
@@ -160,18 +187,21 @@ void loop() {
     pcAlive = false;
     readSerial();;
   }
+  int filtered = medianFilter();  // Remove spikes
+  smoothedValue = alpha * filtered + (1 - alpha) * smoothedValue;  // Smooth changes
+  brightness = (smoothedValue / 4095);
 
   // --- Behavior based on mode ---
   if ((digitalRead(MANUAL_PIN) == HIGH) || (pcAlive == false)) {
     // Manual or lost PC connection
     if (digitalRead(LIMIT_PIN) == HIGH) {
       if ((pcAlive == false) || (digitalRead(MANUAL_PIN) == HIGH)) {
-        setStripRGB((uint8_t)255 * manual_brightness, (uint8_t)0, (uint8_t)0);
+        setStripRGB((uint8_t)255 * brightness, (uint8_t)0, (uint8_t)0);
       }
 
     }
     else {
-      setStripRGB((uint8_t)0, (uint8_t)255 * manual_brightness, (uint8_t)0);
+      setStripRGB((uint8_t)0, (uint8_t)255 * brightness, (uint8_t)0);
       if ((pcAlive == true) || (digitalRead(MANUAL_PIN) == LOW)) {
         return;
       }
